@@ -6,15 +6,26 @@ library(DT)
 library(survival)
 
 # Функция для анализа выживаемости
-analyze_survival <- function(data) {
+analyze_survival <- function(data, group1, group2, plot_title) {
   cat("Начинается анализ выживаемости...\n")
+  
+  # Приводим названия групп к стандартному формату
+  group1 <- trimws(tolower(group1))
+  group2 <- trimws(tolower(group2))
+  data$Group <- tolower(trimws(data$Group))
+  
+  # Фильтруем данные для выбранных групп
+  data <- data[data$Group %in% c(group1, group2), ]
+  if (nrow(data) == 0) {
+    stop("Выбранные группы отсутствуют в данных. Проверьте названия групп.")
+  }
+  data$Group <- factor(data$Group)
   
   # Преобразование данных
   data$Time <- as.numeric(gsub(",", ".", as.character(data$Time)))
   data$Status <- as.integer(data$Status)
-  data$Group <- as.factor(data$Group)
   
-  cat("Данные после преобразования:\n")
+  cat("Данные после фильтрации и преобразования:\n")
   print(head(data))
   
   # Проверка данных
@@ -27,11 +38,6 @@ analyze_survival <- function(data) {
   cat("Объект survival_object создан:\n")
   print(survival_object)
   
-  # Проверка: survival_object существует
-  if (is.null(survival_object)) {
-    stop("Объект survival_object не был создан.")
-  }
-
   # Лог-ранг тест
   logrank_test <- survdiff(survival_object ~ Group, data = data)
   cat("Лог-ранг тест выполнен успешно.\n")
@@ -60,7 +66,7 @@ analyze_survival <- function(data) {
   km_plot <- ggplot(plot_data, aes(x = time, y = surv, color = strata)) +
     geom_step() +
     labs(
-      title = "График Каплана-Майера",
+      title = plot_title,
       x = "Время (годы)",
       y = "Вероятность выживания"
     ) +
@@ -77,6 +83,9 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       fileInput("file", "Загрузите файл CSV", accept = c(".csv")),
+      textInput("plot_title", "Название графика", "График Каплана-Майера"),
+      selectInput("group1", "Группа 1", choices = NULL),
+      selectInput("group2", "Группа 2", choices = NULL),
       actionButton("analyze", "Проанализировать данные"),
       hr(),
       downloadButton("download_results", "Скачать результаты")
@@ -109,6 +118,8 @@ server <- function(input, output, session) {
         stop("Файл должен содержать колонки 'Time', 'Status', 'Group'.")
       }
       
+            updateSelectInput(session, "group1", choices = unique(df$Group))
+      updateSelectInput(session, "group2", choices = unique(df$Group))
       data(df)  # Сохраняем данные в реактивной переменной
     }, error = function(e) {
       cat("Ошибка при чтении файла: ", e$message, "\n")
@@ -117,18 +128,18 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$analyze, {
-    req(data())
+    req(data(), input$group1, input$group2)
     withProgress(message = "Анализ данных...", value = 0, {
       incProgress(0.3, detail = "Подготовка данных")
       Sys.sleep(0.5)  # Искусственная задержка для демонстрации
       
       tryCatch({
-        analysis <- analyze_survival(data())
+        analysis <- analyze_survival(data(), input$group1, input$group2, input$plot_title)
         results(analysis)  # Сохраняем результаты в реактивной переменной
         incProgress(0.7, detail = "Анализ завершён")
       }, error = function(e) {
         cat("Ошибка при анализе данных: ", e$message, "\n")
-        showNotification("Ошибка при анализе данных. Проверьте формат данных.", type = "error")
+        showNotification("Ошибка при анализе данных. Проверьте названия групп.", type = "error")
       })
     })
   })

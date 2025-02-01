@@ -5,6 +5,6 @@ account: polinavd
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 13709111
-bundleId: 9648484
+bundleId: 9733788
 url: https://polinavd.shinyapps.io/ingeneering/
 version: 1

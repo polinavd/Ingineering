@@ -5,77 +5,7 @@ library(survminer)
 library(DT)
 library(survival)
 
-# Функция для анализа выживаемости
-analyze_survival <- function(data, group1, group2, plot_title) {
-  cat("Начинается анализ выживаемости...\n")
-  
-  # Приводим названия групп к стандартному формату
-  group1 <- trimws(tolower(group1))
-  group2 <- trimws(tolower(group2))
-  data$Group <- tolower(trimws(data$Group))
-  
-  # Фильтруем данные для выбранных групп
-  data <- data[data$Group %in% c(group1, group2), ]
-  if (nrow(data) == 0) {
-    stop("Выбранные группы отсутствуют в данных. Проверьте названия групп.")
-  }
-  data$Group <- factor(data$Group)
-  
-  # Преобразование данных
-  data$Time <- as.numeric(gsub(",", ".", as.character(data$Time)))
-  data$Status <- as.integer(data$Status)
-  
-  cat("Данные после фильтрации и преобразования:\n")
-  print(head(data))
-  
-  # Проверка данных
-  if (any(is.na(data$Time)) || any(is.na(data$Status)) || any(is.na(data$Group))) {
-    stop("Данные содержат пропуски. Проверьте файл.")
-  }
-  
-  # Создаём объект выживаемости
-  survival_object <- Surv(data$Time, data$Status)
-  cat("Объект survival_object создан:\n")
-  print(survival_object)
-  
-  # Лог-ранг тест
-  logrank_test <- survdiff(survival_object ~ Group, data = data)
-  cat("Лог-ранг тест выполнен успешно.\n")
-  
-  p_value <- 1 - pchisq(logrank_test$chisq, df = length(unique(data$Group)) - 1)
-  cat("Log-rank p-value:", p_value, "\n")
-
-  # Проверка survfit
-  km_fit <- tryCatch({
-    survfit(survival_object ~ Group, data = data)
-  }, error = function(e) {
-    cat("Ошибка при создании модели survfit: ", e$message, "\n")
-    stop("Проверьте данные и код survfit.")
-  })
-  cat("Модель survfit успешно создана:\n")
-  print(summary(km_fit))
-
-  # Подготовка данных вручную для ggplot
-  plot_data <- data.frame(
-    time = km_fit$time,
-    surv = km_fit$surv,
-    strata = rep(names(km_fit$strata), km_fit$strata)
-  )
-
-  # Построение графика вручную
-  km_plot <- ggplot(plot_data, aes(x = time, y = surv, color = strata)) +
-    geom_step() +
-    labs(
-      title = plot_title,
-      x = "Время (годы)",
-      y = "Вероятность выживания"
-    ) +
-    theme_minimal()
-
-  cat("График Каплана-Майера успешно построен.\n")
-
-  return(list(p_value = p_value, plot = km_plot))
-}
+cat("Загрузка UI...\n")
 
 # UI
 ui <- fluidPage(
@@ -84,8 +14,8 @@ ui <- fluidPage(
     sidebarPanel(
       fileInput("file", "Загрузите файл CSV", accept = c(".csv")),
       textInput("plot_title", "Название графика", "График Каплана-Майера"),
-      selectInput("group1", "Группа 1", choices = NULL),
-      selectInput("group2", "Группа 2", choices = NULL),
+      checkboxInput("show_grid", "Показывать сетку", value = TRUE),
+      checkboxInput("show_median", "Показывать медиану", value = FALSE),
       actionButton("analyze", "Проанализировать данные"),
       hr(),
       downloadButton("download_results", "Скачать результаты")
@@ -99,54 +29,116 @@ ui <- fluidPage(
   )
 )
 
+cat("UI загружен успешно!\n")
+
+# Функция для анализа выживаемости
+analyze_survival <- function(data, plot_title) {
+  cat("Начинается анализ выживаемости...\n")
+  
+  # Преобразование данных
+  data$Time <- as.numeric(gsub(",", ".", as.character(data$Time)))
+  data$Status <- as.integer(data$Status)
+  data$Group <- as.factor(data$Group)
+  
+  # Проверка данных
+  if (any(is.na(data$Time)) || any(is.na(data$Status)) || any(is.na(data$Group))) {
+    stop("Ошибка: в данных есть пропущенные значения.")
+  }
+  
+  if (length(unique(data$Group)) < 2) {
+    stop("Ошибка: недостаточно групп для анализа. Требуется минимум 2.")
+  }
+  
+  # Лог-ранг тест и создание модели survfit, используя данные напрямую
+  logrank_test <- survdiff(Surv(Time, Status) ~ Group, data = data)
+  p_value <- 1 - pchisq(logrank_test$chisq, df = length(unique(data$Group)) - 1)
+  
+  km_fit <- survfit(Surv(Time, Status) ~ Group, data = data)
+  
+  # Построение графика с помощью ggsurvplot
+  km_plot <- ggsurvplot(
+    fit = km_fit,
+    data = data,
+    pval = TRUE,
+    risk.table = TRUE,
+    title = plot_title,
+    legend.title = "Группы",
+    xlab = "Время (годы)",
+    ylab = "Вероятность выживания"
+  )
+  
+  return(list(p_value = p_value, plot = km_plot, data = data, km_fit = km_fit))
+}
+
+cat("Функция анализа выживаемости загружена!\n")
+
 # Server
 server <- function(input, output, session) {
-  # Данные, загруженные пользователем
-  data <- reactiveVal(NULL)
+  cat("Запуск сервера...\n")
   
-  # Результаты анализа
+  data <- reactiveVal(NULL)
   results <- reactiveVal(list())
   
   observeEvent(input$file, {
+    cat("Файл загружен пользователем\n")
     req(input$file)
     tryCatch({
       df <- read.csv(input$file$datapath, sep = ";")
       cat("Файл успешно загружен и считан.\n")
       
-      # Проверка структуры данных
       if (!all(c("Time", "Status", "Group") %in% colnames(df))) {
-        stop("Файл должен содержать колонки 'Time', 'Status', 'Group'.")
+        stop("Ошибка: Файл должен содержать колонки 'Time', 'Status', 'Group'.")
       }
       
-            updateSelectInput(session, "group1", choices = unique(df$Group))
-      updateSelectInput(session, "group2", choices = unique(df$Group))
-      data(df)  # Сохраняем данные в реактивной переменной
+      df$Time <- as.numeric(gsub(",", ".", as.character(df$Time)))
+      df <- df[!is.na(df$Time) & !is.na(df$Status), ]
+      
+      data(df)
+      cat("Файл загружен в data().\n")
     }, error = function(e) {
       cat("Ошибка при чтении файла: ", e$message, "\n")
-      showNotification("Ошибка при чтении файла. Проверьте формат данных.", type = "error")
     })
   })
   
   observeEvent(input$analyze, {
-    req(data(), input$group1, input$group2)
+    cat("Запущен анализ данных...\n")
+    req(data())
+    
     withProgress(message = "Анализ данных...", value = 0, {
       incProgress(0.3, detail = "Подготовка данных")
-      Sys.sleep(0.5)  # Искусственная задержка для демонстрации
+      Sys.sleep(0.5)
       
       tryCatch({
-        analysis <- analyze_survival(data(), input$group1, input$group2, input$plot_title)
-        results(analysis)  # Сохраняем результаты в реактивной переменной
+        analysis <- analyze_survival(data(), input$plot_title)
+        results(analysis)
         incProgress(0.7, detail = "Анализ завершён")
+        cat("Анализ успешно завершён!\n")
       }, error = function(e) {
         cat("Ошибка при анализе данных: ", e$message, "\n")
-        showNotification("Ошибка при анализе данных. Проверьте названия групп.", type = "error")
       })
     })
   })
   
   output$survival_plot <- renderPlot({
     req(results())
-    results()$plot
+    # Извлекаем ggplot объект из результата ggsurvplot
+    base_plot <- results()$plot$plot
+    
+    if (!input$show_grid) {
+      base_plot <- base_plot + theme(panel.grid = element_blank())
+    }
+    
+    if (input$show_median) {
+      overall_median <- median(results()$data$Time, na.rm = TRUE)
+      base_plot <- base_plot +
+        geom_hline(yintercept = 0.5, linetype = "dashed", color = "blue") +
+        geom_vline(xintercept = overall_median, linetype = "dotted", color = "red") +
+        annotate("text", x = overall_median, y = 0.55,
+                 label = paste("Me =", round(overall_median, 2)),
+                 color = "red", hjust = -0.1)
+    }
+    
+    return(base_plot)
   })
   
   output$logrank_table <- renderDT({
@@ -171,5 +163,9 @@ server <- function(input, output, session) {
   )
 }
 
-# Запуск приложения
+cat("Сервер загружен, запускаем приложение...\n")
+
+# Запуск приложения Shiny
 shinyApp(ui = ui, server = server)
+
+
